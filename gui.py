@@ -27,7 +27,6 @@ matplotlib.use("TkAgg")
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 
-# ===================== Configuration =====================
 BINARY_CLASSES = ['Indoor', 'Outdoor']
 CLASS_COLORS = {'Indoor': '#2E86AB', 'Outdoor': '#A23B72'}
 CLASS_DESCRIPTIONS = {
@@ -37,13 +36,11 @@ CLASS_DESCRIPTIONS = {
 
 DATA_ROOT = 'Data'
 
-# --- Use one or more checkpoints. You can list the five CV folds here. ---
-# Example: ["checkpoints_cv/fold1_best.pth", "checkpoints_cv/fold2_best.pth", ...]
 CHECKPOINTS = [
-    "checkpoints_cv/fold1_best.pth",
+    "checkpoints_cv/fold4_best.pth",
     # "checkpoints_cv/fold2_best.pth",
     # "checkpoints_cv/fold3_best.pth",
-    # "checkpoints_cv/fold4_best.pth",
+    # "checkpoints_cv/fold1_best.pth",
     # "checkpoints_cv/fold5_best.pth",
     # Or: "checkpoints_ft/best_finetune.ckpt",
 ]
@@ -54,7 +51,6 @@ N_FFT = 1024
 N_MELS = 128
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-# ===================== Model definitions =====================
 class CVBinaryNet(nn.Module):
     """
     Matches your training layout:
@@ -65,7 +61,7 @@ class CVBinaryNet(nn.Module):
     def __init__(self, head_dims, num_len_bins=None, len_emb_dim=None):
         super().__init__()
         base = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
-        base.fc = nn.Identity()  # 512-d feature
+        base.fc = nn.Identity() 
         self.backbone = base
 
         self.num_len_bins = int(num_len_bins) if num_len_bins else 0
@@ -86,20 +82,17 @@ class CVBinaryNet(nn.Module):
         self.head = nn.Sequential(*layers)
 
     def forward(self, x, len_bin=None):
-        f = self.backbone(x)  # (B,512)
+        f = self.backbone(x)  
         if self.len_emb is not None:
             if len_bin is None:
                 raise RuntimeError("Model expects len_bin but got None")
-            emb = self.len_emb(len_bin)  # (B, len_emb_dim)
+            emb = self.len_emb(len_bin)  
             f = torch.cat([f, emb], dim=1)
         return self.head(f)
 
 
 def _build_from_cv_state(state):
-    """
-    Build CVBinaryNet by reading shapes from checkpoint state dict with 'backbone.*', 'head.*', optional 'len_emb.*'
-    """
-    # strip potential DistributedDataParallel prefixes
+  
     clean = {}
     for k, v in state.items():
         if k.startswith('module.'):
@@ -110,9 +103,8 @@ def _build_from_cv_state(state):
     has_backbone = any(k.startswith('backbone.') for k in state.keys())
     has_head = any(k.startswith('head.') for k in state.keys())
     if not (has_backbone and has_head):
-        return None, None  # not CV-style
+        return None, None  
 
-    # infer head dims from weights
     w0 = state.get('head.0.weight')
     w1 = state.get('head.4.weight')
     w2 = state.get('head.8.weight')
@@ -122,11 +114,11 @@ def _build_from_cv_state(state):
     head_in = w0.shape[1]
     h1 = w0.shape[0]
     h2 = w1.shape[0]
-    h3 = w2.shape[0]  # should be 2
+    h3 = w2.shape[0]  
 
     num_len_bins = len_emb_dim = 0
     if 'len_emb.weight' in state:
-        len_w = state['len_emb.weight']  # [num_bins, emb_dim]
+        len_w = state['len_emb.weight'] 
         num_len_bins, len_emb_dim = len_w.shape
 
     model = CVBinaryNet(
@@ -167,7 +159,6 @@ def _build_from_vanilla_state(state):
     )
     base = base.to(DEVICE)
 
-    # try direct load; if it fails, try removing "model." prefix
     try:
         base.load_state_dict(state, strict=True)
     except RuntimeError:
@@ -185,7 +176,6 @@ def load_single_checkpoint(path):
     if not os.path.exists(path):
         raise FileNotFoundError(f"Checkpoint not found: {path}")
 
-    # PyTorch 2.6: weights_only default=True; set to False if you trust the source.
     payload = torch.load(path, map_location=DEVICE, weights_only=False)
     state = payload.get('model_state_dict') or payload.get('state_dict') or payload
 
@@ -200,13 +190,11 @@ def load_single_checkpoint(path):
 
 
 class EnsembleWrapper(nn.Module):
-    """
-    Average logits from multiple models. Supports CVBinaryNet (with optional len_bin) and vanilla ResNet heads.
-    """
+
     def __init__(self, members):
         super().__init__()
         self.members = nn.ModuleList([m for m, _ in members])
-        self.metas = [meta for _, meta in members]  # meta may be None
+        self.metas = [meta for _, meta in members]  
 
     def forward(self, x, len_bin=None):
         logits = None
@@ -230,19 +218,15 @@ def load_model_ensemble(paths):
     if len(members) == 0:
         raise RuntimeError("No valid checkpoints loaded.")
     if len(members) == 1:
-        # return the single model as-is
         return members[0][0], members[0][1]
-    # wrap in ensemble
     ens = EnsembleWrapper(members).to(DEVICE)
     ens.eval()
     torch.set_grad_enabled(False)
     print(f"[OK] Ensemble ready ({len(members)} models).")
-    # meta: if any member needs len_bin, we will compute it
     needs_len = any((meta is not None and meta.get('num_len_bins', 0) > 0) for _, meta in members)
     return ens, {'num_len_bins': 1 if needs_len else 0, 'len_emb_dim': 0}
 
 
-# ===================== Preprocessing =====================
 transform = transforms.Compose([
     transforms.ToPILImage(),
     transforms.Resize((224, 224)),
@@ -277,7 +261,7 @@ def prepare_input(spec_db):
     std = spec_db.std() + 1e-8
     spec_db = (spec_db - mean) / std
 
-    spec = torch.from_numpy(spec_db).float()  # (128, T)
+    spec = torch.from_numpy(spec_db).float()  
     T = spec.shape[1]
 
     if T > T_MAX:
@@ -289,11 +273,10 @@ def prepare_input(spec_db):
         pad_right = pad_total - pad_left
         spec = F.pad(spec, (pad_left, pad_right, 0, 0))
 
-    img = spec.unsqueeze(0).repeat(3, 1, 1)  # (3, 128, T_MAX)
-    img = transform(img).unsqueeze(0).to(DEVICE)  # (1, 3, 224, 224)
+    img = spec.unsqueeze(0).repeat(3, 1, 1) 
+    img = transform(img).unsqueeze(0).to(DEVICE)  
     return img
 
-# ===================== Load model(s) =====================
 if len(CHECKPOINTS) == 0:
     print("Error: please set CHECKPOINTS to at least one .pth/.ckpt file.", file=sys.stderr)
     sys.exit(1)
@@ -309,14 +292,12 @@ except Exception as e:
         pass
     sys.exit(1)
 
-# ===================== Prediction =====================
 def predict_audio(file_path):
     y, sr = load_audio_file(file_path)
     spec_db = compute_spectrogram(y, sr)
     T_raw = spec_db.shape[1]
     img = prepare_input(spec_db)
 
-    # length bin if any member needs it
     len_bin = None
     nbins = int(model_meta.get('num_len_bins', 0)) if model_meta else 0
     if nbins > 0:
@@ -339,7 +320,6 @@ def predict_audio(file_path):
         'spectrogram': spec_db
     }
 
-# ===================== GUI Classes =====================
 class AudioPlayer:
     def __init__(self):
         self.is_playing = False
@@ -879,7 +859,6 @@ Max Time Steps: {T_MAX}
         self.destroy()
 
 
-# ===================== Main =====================
 if __name__ == "__main__":
     try:
         app = AudioClassifierApp()
