@@ -1,4 +1,3 @@
-# eval_resume.py (threshold-tuned + optional ensemble)
 import os
 import argparse
 import numpy as np
@@ -22,7 +21,6 @@ from script1 import (
     seconds_to_frames,
 )
 
-# ---------- split identical to training ----------
 def build_splits(data_dir: str):
     tmp = LengthBinAudioDataset(data_dir, mode='train', indices=None, transform=None)
     n = len(tmp.file_paths)
@@ -57,7 +55,7 @@ def collect_window_probs(model, loader, use_ema=True):
     for imgs, y, bin_ids, fids in loader:
         imgs = imgs.to(DEVICE); y = y.to(DEVICE); bin_ids = bin_ids.to(DEVICE)
         logits = model(imgs, bin_ids)
-        p = F.softmax(logits, dim=1)[:, 1]  # Outdoor prob
+        p = F.softmax(logits, dim=1)[:, 1] 
         probs_out.append(p.cpu().numpy())
         labels.append(y.cpu().numpy())
         file_ids.append(fids.numpy())
@@ -110,10 +108,8 @@ def main():
     ap.add_argument('--tsteps', type=int, default=41)
     args = ap.parse_args()
 
-    # splits
     _, val_idx, test_idx = build_splits(args.data_dir)
 
-    # datasets/loaders
     val_ds  = LengthBinAudioDataset(args.data_dir, mode='val',
                                     indices=val_idx, transform=to_224_and_normalize,
                                     tta_offsets=VAL_TTA_OFFSETS)
@@ -123,7 +119,6 @@ def main():
     val_loader  = DataLoader(val_ds,  batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=True)
     test_loader = DataLoader(test_ds, batch_size=args.batch_size, shuffle=False, num_workers=4, pin_memory=True)
 
-    # load models
     models = []
     ckpt_meta = []
     for path in args.ckpt:
@@ -131,37 +126,30 @@ def main():
         m, meta = load_model(path, args.backbone)
         models.append(m); ckpt_meta.append(meta)
 
-    # collect window probs, then average per file (ensemble = mean probs across models)
     def ensemble_probs(loader):
         all_file_ids, all_probs, all_labels = None, [], None
         for m in models:
             p, y, f = collect_window_probs(m, loader, use_ema=True)
-            # sort by file id order for stable averaging
-            # we’ll aggregate per-file after averaging window probs
+
             if all_file_ids is None: all_file_ids = f
             all_probs.append(p)
             if all_labels is None: all_labels = y
         probs_mean = np.mean(np.stack(all_probs, axis=0), axis=0)
         return probs_mean, all_labels, all_file_ids
 
-    # VAL
     p_val_w, y_val_w, f_val = ensemble_probs(val_loader)
     _, p_val, y_val = aggregate_per_file_probs(f_val, p_val_w, y_val_w)
     t_best, val_acc_best, val_f1_best = search_best_threshold(p_val, y_val, args.tmin, args.tmax, args.tsteps)
 
-    # TEST
     p_test_w, y_test_w, f_test = ensemble_probs(test_loader)
     _, p_test, y_test = aggregate_per_file_probs(f_test, p_test_w, y_test_w)
 
-    # argmax baseline (for reference)
     acc_val_argmax, cm_val_argmax, rep_val_argmax, _ = report_from_probs(p_val, y_val, 0.5)
     acc_test_argmax, cm_test_argmax, rep_test_argmax, _ = report_from_probs(p_test, y_test, 0.5)
 
-    # threshold-tuned
     acc_val_t, cm_val_t, rep_val_t, _ = report_from_probs(p_val, y_val, t_best)
     acc_test_t, cm_test_t, rep_test_t, _ = report_from_probs(p_test, y_test, t_best)
 
-    # print
     print("\nLoaded checkpoints:")
     for i, path in enumerate(args.ckpt):
         be = ckpt_meta[i].get('epoch', None)
