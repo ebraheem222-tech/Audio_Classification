@@ -1,4 +1,3 @@
-# finetune_resume.py
 import os
 import argparse
 import numpy as np
@@ -8,7 +7,6 @@ from torch.utils.data import DataLoader
 from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.metrics import confusion_matrix, classification_report
 
-# ==== import building blocks from your script1.py ====
 from script1 import (
     LengthBinAudioDataset,
     to_224_and_normalize,
@@ -32,21 +30,17 @@ from script1 import (
     FREEZE_UNTIL,
 )
 
-# ---------- helpers to reproduce the same splits ----------
 def build_splits(data_dir: str):
-    """
-    Reproduce the exact split logic from script1.py:
-      70% train / 15% val / 15% test (stratified by Indoor/Outdoor).
-    """
+   
     tmp = LengthBinAudioDataset(data_dir, mode='train', indices=None, transform=None)
     n = len(tmp.file_paths)
     labels = tmp.labels.copy()
     idx = np.arange(n)
 
-    sss1 = StratifiedShuffleSplit(n_splits=1, test_size=0.30, random_state=SEED)  # 70/30
+    sss1 = StratifiedShuffleSplit(n_splits=1, test_size=0.30, random_state=SEED) 
     train_idx, hold_idx = next(sss1.split(idx, labels))
     hold_labels = labels[hold_idx]
-    sss2 = StratifiedShuffleSplit(n_splits=1, test_size=0.50, random_state=SEED)  # 15/15
+    sss2 = StratifiedShuffleSplit(n_splits=1, test_size=0.50, random_state=SEED) 
     val_rel, test_rel = next(sss2.split(hold_idx, hold_labels))
     val_idx = hold_idx[val_rel]
     test_idx = hold_idx[test_rel]
@@ -103,10 +97,8 @@ def main():
 
     os.makedirs(args.out_dir, exist_ok=True)
 
-    # ====== rebuild splits like training ======
     train_idx, val_idx, _ = build_splits(args.data_dir)
 
-    # datasets/loaders
     train_ds = LengthBinAudioDataset(args.data_dir, mode='train', indices=train_idx, transform=to_224_and_normalize)
     val_ds   = LengthBinAudioDataset(args.data_dir, mode='val',   indices=val_idx,
                                      transform=to_224_and_normalize, tta_offsets=VAL_TTA_OFFSETS)
@@ -117,13 +109,11 @@ def main():
     val_loader   = DataLoader(val_ds,  batch_size=args.batch_size, shuffle=False,
                               num_workers=4, pin_memory=True)
 
-    # ====== model ======
     model = LenAwareNet(backbone_name=args.backbone,
                         len_emb_dim=LEN_EMB_DIM,
                         num_bins=NUM_BINS,
                         freeze_until=FREEZE_UNTIL).to(DEVICE)
 
-    # param groups (backbone slower LR than head)
     backbone_params, head_params = [], []
     for n, p in model.named_parameters():
         if not p.requires_grad: continue
@@ -137,17 +127,14 @@ def main():
         {'params': head_params,     'lr': args.base_lr,       'weight_decay': WEIGHT_DECAY_HEAD},
     ])
 
-    # ====== resume ======
     assert os.path.exists(args.ckpt), f"Checkpoint not found: {args.ckpt}"
     ckpt = torch.load(args.ckpt, map_location=DEVICE, weights_only=False)
     model.load_state_dict(ckpt['model_state_dict'])
 
-    # restore optimizer state if present, then shrink LR so fine-tune is gentle
     if 'optimizer_state_dict' in ckpt:
         try:
             optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         except Exception:
-            # state shapes may differ if you change backbone; safe to ignore
             pass
     for g in optimizer.param_groups:
         g['lr'] = max(g['lr'] * args.lr_shrink, args.min_lr)
@@ -161,25 +148,20 @@ def main():
     print(f"  best_val_loss_ckpt: {best_val_loss_ckpt:.4f}")
     print(f"  LR after shrink  : {[pg['lr'] for pg in optimizer.param_groups]}")
 
-    # ====== scheduler: cosine warm restarts (good for long fine-tunes) ======
     scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
         optimizer, T_0=10, T_mult=2, eta_min=args.min_lr
     )
 
-    # ====== loss ======
     if args.loss == 'ce_ls':
         criterion = torch.nn.CrossEntropyLoss(label_smoothing=0.1)
     else:
-        # class-balanced alpha from training labels in this split
         tr_counts = np.bincount(train_ds.labels, minlength=2).astype(np.float32)
         p = tr_counts / tr_counts.sum()
         alpha = (1.0 - p).tolist()
         criterion = FocalLossCB(gamma=FOCAL_GAMMA, alpha=alpha)
 
-    # ====== EMA container (shadow will be updated during train) ======
     ema = EMA(model)
 
-    # ====== fine-tune loop ======
     best_val_acc = 0.0
     best_val_loss = float('inf')
     patience, bad = 20, 0
@@ -188,7 +170,6 @@ def main():
         model.train()
         run_loss, correct, seen = 0.0, 0, 0
 
-        # disable MixUp in the last N epochs, else use MIXUP_ALPHA
         mixup_p = 0.0 if (args.no_mixup_last > 0 and e > args.epochs - args.no_mixup_last) else 0.7
 
         for bi, (imgs, labels, bin_ids, fids) in enumerate(train_loader):
@@ -227,10 +208,9 @@ def main():
         train_loss = run_loss / max(1, len(train_loader.dataset))
         train_acc = correct / max(1, seen)
 
-        # validation (EMA + per-file)
         val_loss, val_acc, y_true, y_pred = validate_epoch(model, val_loader, criterion, use_ema=True)
 
-        scheduler.step(e)  # step scheduler per epoch
+        scheduler.step(e)  
 
         print(f"\n{'='*60}")
         print(f"Epoch {e:03d} | "
@@ -259,7 +239,6 @@ def main():
                 print("Early stopping.")
                 break
 
-    # final echo
     print("\nFine-tune finished.")
     print(f"Best Val Acc : {best_val_acc:.4f}")
     print(f"Best Val Loss: {best_val_loss:.4f}")
