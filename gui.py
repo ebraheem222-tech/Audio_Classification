@@ -52,12 +52,7 @@ N_MELS = 128
 DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 class CVBinaryNet(nn.Module):
-    """
-    Matches your training layout:
-      - backbone: resnet18 features (fc removed) -> 512-d
-      - optional len_emb: Embedding(num_bins, emb_dim)
-      - head: MLP built from checkpoint shapes: Linear -> (BN/ReLU/Dropout) ... -> Linear -> ... -> Linear
-    """
+
     def __init__(self, head_dims, num_len_bins=None, len_emb_dim=None):
         super().__init__()
         base = models.resnet18(weights=models.ResNet18_Weights.DEFAULT)
