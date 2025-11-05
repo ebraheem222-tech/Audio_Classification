@@ -1,4 +1,3 @@
-# cv_train_eval.py
 import os, json, numpy as np, torch, argparse
 from collections import defaultdict
 from torch.utils.data import DataLoader
@@ -59,12 +58,10 @@ def eval_loader_per_file(model, loader, criterion=None, use_ema=True):
     return val_loss, acc, f1, cm, rep, y_true, y_pred
 
 def train_one_fold(args, fold_id, train_idx, val_idx, test_idx, out_dir):
-    # loaders
     train_ds, val_ds, test_ds, train_loader, val_loader, test_loader = make_loaders(
         args.data_dir, train_idx, val_idx, test_idx, args.batch_size
     )
 
-    # model/opt/sched/loss
     model = LenAwareNet(backbone_name=args.backbone,
                         len_emb_dim=LEN_EMB_DIM, num_bins=NUM_BINS,
                         freeze_until=FREEZE_UNTIL).to(DEVICE)
@@ -83,11 +80,9 @@ def train_one_fold(args, fold_id, train_idx, val_idx, test_idx, out_dir):
     if args.loss == "ce_ls":
         criterion = torch.nn.CrossEntropyLoss(label_smoothing=0.1)
     elif args.loss == "ce_cls_weight":
-        # small Outdoor boost
         w = torch.tensor([1.0, 1.15], device=DEVICE)
         criterion = torch.nn.CrossEntropyLoss(weight=w, label_smoothing=0.05)
     else:
-        # Focal with class-balanced alpha computed from train labels
         tr_counts = np.bincount(train_ds.labels, minlength=2).astype(np.float32)
         p = tr_counts / tr_counts.sum()
         alpha = (1.0 - p).tolist()
@@ -101,7 +96,6 @@ def train_one_fold(args, fold_id, train_idx, val_idx, test_idx, out_dir):
         model.train()
         run_loss, correct, seen = 0.0, 0, 0
 
-        # late tighten: disable mixup in last no_mixup_last epochs
         mixup_p = 0.0 if (args.no_mixup_last > 0 and e > args.epochs - args.no_mixup_last) else 0.7
 
         for bi, (imgs, labels, bin_ids, _) in enumerate(train_loader):
@@ -135,7 +129,6 @@ def train_one_fold(args, fold_id, train_idx, val_idx, test_idx, out_dir):
         train_loss = run_loss / max(1, len(train_loader.dataset))
         train_acc = correct / max(1, seen)
 
-        # validate (EMA + per-file)
         val_loss, val_acc, val_f1, _, _, _, _ = eval_loader_per_file(model, val_loader, criterion, use_ema=True)
         scheduler.step()
 
@@ -163,7 +156,6 @@ def train_one_fold(args, fold_id, train_idx, val_idx, test_idx, out_dir):
                 print(f"  early stop (patience={patience})")
                 break
 
-    # load best for test
     ckpt = torch.load(os.path.join(out_dir, f"fold{fold_id}_best.pth"), map_location=DEVICE, weights_only=False)
     model.load_state_dict(ckpt["model_state_dict"])
     tloss, tacc, tf1, tcm, trep, y_true, y_pred = eval_loader_per_file(model, test_loader, None, use_ema=True)
@@ -197,14 +189,12 @@ def main():
 
     os.makedirs(args.out_dir, exist_ok=True)
 
-    # Scan once to get file indices & labels
     tmp = LengthBinAudioDataset(args.data_dir, mode='train', indices=None, transform=None)
     n = len(tmp.file_paths); idx = np.arange(n); labels = tmp.labels.copy()
 
     skf = StratifiedKFold(n_splits=args.k, shuffle=True, random_state=SEED)
     all_results = []
     for fold_id, (trainval_idx, test_idx) in enumerate(skf.split(idx, labels), start=1):
-        # Inside-fold val split (stratified)
         trlabels = labels[trainval_idx]
         sss = StratifiedShuffleSplit(n_splits=1, test_size=args.val_frac, random_state=SEED + fold_id)
         tr_rel, val_rel = next(sss.split(trainval_idx, trlabels))
@@ -217,7 +207,6 @@ def main():
         all_results.append(res)
         print(f"[Fold {fold_id}] Test Acc: {res['test_acc']:.4f} | Test F1_macro: {res['test_f1_macro']:.4f}\n")
 
-    # summarize
     test_accs = [r["test_acc"] for r in all_results]
     test_f1s  = [r["test_f1_macro"] for r in all_results]
     summary = {
