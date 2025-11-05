@@ -366,7 +366,6 @@ class LenAwareNet(nn.Module):
         return self.head(fused)
 
 
-# --------------------------- Losses ---------------------------
 
 class FocalLossCB(nn.Module):
 
@@ -466,7 +465,6 @@ def aggregate_file_logits(file_ids, logits, labels):
 
 
 def mixup_batch(imgs, labels, bins, alpha=MIXUP_ALPHA, p=0.5):
-    # When MixUp not applied -> return (imgs, None, None, None)
     if alpha <= 0 or random.random() > p:
         return imgs, None, None, None
 
@@ -475,7 +473,6 @@ def mixup_batch(imgs, labels, bins, alpha=MIXUP_ALPHA, p=0.5):
 
     mixed_imgs = lam * imgs + (1 - lam) * imgs[idx]
     labels_a, labels_b = labels, labels[idx]
-    # we DO NOT use mixed bins for the model; keep original bin_ids
     return mixed_imgs, (labels_a, labels_b, lam), None, idx
 
 
@@ -498,10 +495,10 @@ def main():
     labels = tmp.labels.copy()
     idx = np.arange(n)
 
-    sss1 = StratifiedShuffleSplit(n_splits=1, test_size=0.30, random_state=SEED)  # 70% train, 30% holdout
+    sss1 = StratifiedShuffleSplit(n_splits=1, test_size=0.30, random_state=SEED) 
     train_idx, hold_idx = next(sss1.split(idx, labels))
     hold_labels = labels[hold_idx]
-    sss2 = StratifiedShuffleSplit(n_splits=1, test_size=0.50, random_state=SEED)  # split 30% into 15/15
+    sss2 = StratifiedShuffleSplit(n_splits=1, test_size=0.50, random_state=SEED)  
     val_rel, test_rel = next(sss2.split(hold_idx, hold_labels))
     val_idx = hold_idx[val_rel]
     test_idx = hold_idx[test_rel]
@@ -552,7 +549,6 @@ def main():
         start_epoch = ckpt.get('epoch', 0) + 1
         best_val_acc = ckpt.get('best_val_acc', 0.0)
         best_val_loss = ckpt.get('best_val_loss', float('inf'))
-        # Recreate EMA shadow from current model
         ema = EMA(model, decay=EMA_DECAY)
         print(f"Resumed from epoch {start_epoch}")
 
